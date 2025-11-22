@@ -1,0 +1,15 @@
+[
+  {
+    "farm_id": "",
+    "name": "",
+    "lat": "",
+    "lon": "",
+    "inventory_pigs": "",
+    "avg_weight_kg": "",
+    "growth_rate_kg_per_week": "",
+    "age_weeks": "",
+    "price_per_kg": "",
+    "consumption_pigs": "",
+    "capacity": ""
+  }
+]
