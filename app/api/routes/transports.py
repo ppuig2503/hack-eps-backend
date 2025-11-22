@@ -70,9 +70,9 @@ async def init_transport(transport_data: TransportInit, db=Depends(get_db)):
         "capacity_tons": capacity_tons,
         "max_hours_per_week": 40,
         "fixed_weekly_cost": 2000.0,
-        "current_location": None,
-        "status": "available",
-        "fuel_efficiency": None,
+        #"current_location": None,
+        #"status": "available",
+        #"fuel_efficiency": None,
         "updated_at": datetime.utcnow()
     }
     

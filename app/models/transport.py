@@ -45,9 +45,9 @@ class Transport(BaseModel):
     capacity_tons: float
     max_hours_per_week: int
     fixed_weekly_cost: float
-    current_location: Optional[dict] = None
-    status: Optional[str] = "available"
-    fuel_efficiency: Optional[float] = None
+    #current_location: Optional[dict] = None
+    #status: Optional[str] = "available"
+    #fuel_efficiency: Optional[float] = None
     
     class Config:
         populate_by_name = True
