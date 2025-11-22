@@ -1,0 +1,16 @@
+slaughterhouse_id,name,lat,lon,capacity_per_day,current_load
+SH001,Escorxador Central de Barcelona,41.3851,2.1734,500,0
+SH002,Matadero Comarcal de Lleida,41.6175,0.6200,300,0
+SH003,Escorxador de Girona,41.9794,2.8214,250,0
+SH004,Matadero Industrial de Tarragona,41.1189,1.2445,400,0
+SH005,Escorxador de Vic,41.9304,2.2550,200,0
+SH006,Matadero de Manresa,41.7286,1.8287,180,0
+SH007,Escorxador de Reus,41.1557,1.1070,220,0
+SH008,Matadero de Igualada,41.5788,1.6173,150,0
+SH009,Escorxador de Figueres,42.2667,2.9611,160,0
+SH010,Matadero de Tortosa,40.8122,0.5214,190,0
+SH011,Escorxador de Olot,42.1817,2.4886,120,0
+SH012,Matadero de Balaguer,41.7889,0.8061,140,0
+SH013,Escorxador de Vilafranca del Penedès,41.3453,1.6976,170,0
+SH014,Matadero de Mollerussa,41.6328,0.8964,130,0
+SH015,Escorxador de Berga,42.1003,1.8444,100,0
