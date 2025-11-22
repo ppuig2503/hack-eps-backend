@@ -1,12 +1,25 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from app.core.config import settings
+from app.database.mongodb import MongoDB
 from app.api.routes import farms, slaughterhouses, transports, optimization
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Conectar a MongoDB
+    await MongoDB.connect_db()
+    yield
+    # Shutdown: Cerrar conexión
+    await MongoDB.close_db()
+
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version=settings.VERSION,
-    description="Backend API para optimización de rutas logísticas"
+    description="Backend API para optimización de rutas logísticas",
+    lifespan=lifespan
 )
 
 # Configuración de CORS
