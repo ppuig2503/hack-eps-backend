@@ -21,6 +21,15 @@ class FarmState:
     price_per_kg: float          # precio de compra al ganadero
     consumption_pigs: int
     last_visit_week: int = -1    # semana de última visita (0,1,...)
+    
+    # Métricas económicas de la granja
+    total_revenue: float = 0.0       # ingresos totales por venta de cerdos
+    kg_feed_consumed: float = 0.0    # kg de comida consumidos
+    sales: list = None               # lista de ventas detalladas
+    
+    def __post_init__(self):
+        if self.sales is None:
+            self.sales = []
 
 
 @dataclass
@@ -30,6 +39,17 @@ class SlaughterhouseState:
     lat: float
     lon: float
     capacity_per_day: int        # capacidad de sacrificio diaria
+    trips: list = None           # lista de viajes con detalles de coste
+    trucks_week_0: set = None    # IDs de camiones usados en semana 0
+    trucks_week_1: set = None    # IDs de camiones usados en semana 1
+    
+    def __post_init__(self):
+        if self.trips is None:
+            self.trips = []
+        if self.trucks_week_0 is None:
+            self.trucks_week_0 = set()
+        if self.trucks_week_1 is None:
+            self.trucks_week_1 = set()
 
 
 @dataclass
@@ -115,47 +135,175 @@ def normal_cdf(x: float, mu: float, sigma: float) -> float:
 
 def weight_penalty_profile(mean_w: float, std_w: float):
     """
-    Devuelve (fracciones_por_rango, penalización_media).
-    Rangos: <100, 100–105, 105–115, 115–120, >120
-    Penalizaciones: 20%, 15%, 0%, 15%, 20%
+    Devuelve (fracciones_por_rango, penalización).
+    Penalizaciones simplificadas:
+    - 0.0 (0%) si peso medio está entre 105-115 kg (óptimo)
+    - 0.15 (15%) si está fuera del óptimo pero dentro de 100-120 kg
+    - 0.20 (20%) si está por debajo de 100 kg o por encima de 120 kg
     """
     if std_w <= 0:
-        if mean_w < 100:
-            return (1, 0, 0, 0, 0), 0.20
-        elif mean_w < 105:
-            return (0, 1, 0, 0, 0), 0.15
-        elif mean_w <= 115:
-            return (0, 0, 1, 0, 0), 0.0
-        elif mean_w <= 120:
-            return (0, 0, 0, 1, 0), 0.15
+        # Sin desviación: penalty determinista según peso medio
+        if 105 <= mean_w <= 115:
+            return (0, 0, 1), 0.0  # óptimo
+        elif 100 <= mean_w < 105 or 115 < mean_w <= 120:
+            return (0, 1, 0), 0.15  # fuera del óptimo pero aceptable
         else:
-            return (0, 0, 0, 0, 1), 0.20
+            return (1, 0, 0), 0.20  # fuera del rango aceptable
 
-    p_lt_100 = normal_cdf(100, mean_w, std_w)
-    p_100_105 = normal_cdf(105, mean_w, std_w) - p_lt_100
-    p_105_115 = normal_cdf(115, mean_w, std_w) - normal_cdf(105, mean_w, std_w)
-    p_115_120 = normal_cdf(120, mean_w, std_w) - normal_cdf(115, mean_w, std_w)
-    p_gt_120 = 1 - normal_cdf(120, mean_w, std_w)
+    # Con desviación: calcular probabilidades por rangos
+    # Rangos: <100 o >120 | 100-105 o 115-120 | 105-115
+    p_extreme = normal_cdf(100, mean_w, std_w) + (1 - normal_cdf(120, mean_w, std_w))
+    p_acceptable = (normal_cdf(105, mean_w, std_w) - normal_cdf(100, mean_w, std_w)) + \
+                   (normal_cdf(120, mean_w, std_w) - normal_cdf(115, mean_w, std_w))
+    p_optimal = normal_cdf(115, mean_w, std_w) - normal_cdf(105, mean_w, std_w)
 
-    total = p_lt_100 + p_100_105 + p_105_115 + p_115_120 + p_gt_120
+    total = p_extreme + p_acceptable + p_optimal
     if total == 0:
         total = 1.0
 
-    p_lt_100 /= total
-    p_100_105 /= total
-    p_105_115 /= total
-    p_115_120 /= total
-    p_gt_120 /= total
+    p_extreme /= total
+    p_acceptable /= total
+    p_optimal /= total
 
-    penalty = (
-        p_lt_100 * 0.20 +
-        p_100_105 * 0.15 +
-        p_105_115 * 0.0 +
-        p_115_120 * 0.15 +
-        p_gt_120 * 0.20
+    penalty = p_extreme * 0.20 + p_acceptable * 0.15 + p_optimal * 0.0
+
+    return (p_extreme, p_acceptable, p_optimal), penalty
+
+
+def days_to_weight_range(current_weight: float, growth_rate: float, target_min: float, target_max: float) -> tuple:
+    """
+    Calcula días hasta que el cerdo entre/salga del rango de peso objetivo.
+    Retorna (días_hasta_entrar, días_hasta_salir, está_en_rango)
+    """
+    if growth_rate <= 0:
+        in_range = target_min <= current_weight <= target_max
+        return (float('inf'), float('inf'), in_range)
+    
+    in_range = target_min <= current_weight <= target_max
+    
+    if current_weight < target_min:
+        days_to_enter = (target_min - current_weight) / growth_rate
+        days_to_exit = (target_max - current_weight) / growth_rate
+        return (days_to_enter, days_to_exit, False)
+    elif current_weight <= target_max:
+        days_to_exit = (target_max - current_weight) / growth_rate
+        return (0, days_to_exit, True)
+    else:
+        return (float('inf'), 0, False)
+
+
+def calculate_weight_timing_score(farm: FarmState, current_day: int) -> float:
+    """
+    Calcula un score de timing basado en cuán cerca está la granja del rango óptimo (105-115 kg).
+    Score más alto = mejor momento para recoger.
+    Usa growth_rate para priorizar: cerdos con mayor crecimiento tienen mayor urgencia.
+    Objetivo: minimizar número de camiones evitando pánico cuando el peso es ideal.
+    """
+    optimal_min = 105.0
+    optimal_max = 115.0
+    min_acceptable = 100.0
+    warning_weight = 130.0
+    critical_weight = 150.0
+    current_weight = farm.avg_weight_kg
+    growth_rate = farm.growth_rate_kg_per_day
+    
+    # Penalización muy fuerte para cerdos extremadamente ligeros
+    if current_weight < 80:
+        return -100.0
+    elif current_weight < min_acceptable:
+        return -50.0 + (current_weight - 80) * 2.25
+    
+    # Cerdos críticos >150kg: pérdida total, máxima prioridad
+    if current_weight >= critical_weight:
+        return 95.0
+    
+    days_to_enter, days_to_exit, in_optimal = days_to_weight_range(
+        current_weight, growth_rate, optimal_min, optimal_max
     )
-
-    return (p_lt_100, p_100_105, p_105_115, p_115_120, p_gt_120), penalty
+    
+    # Calcular días hasta alcanzar peso crítico
+    days_to_critical = (critical_weight - current_weight) / growth_rate if growth_rate > 0 else float('inf')
+    
+    # Factor de urgencia basado en growth_rate (normalizado)
+    # growth_rate alto = más urgente (0-20 kg/semana -> 0-2.86 kg/día)
+    # Normalizamos: 0-3 kg/día -> factor 0-1
+    urgency_factor = min(growth_rate / 3.0, 1.0)
+    
+    # Si está en el rango óptimo (105-115 kg)
+    if in_optimal:
+        # NO entrar en pánico si el crecimiento es bajo y hay tiempo
+        if growth_rate < 1.5:  # Crecimiento muy lento (<10.5 kg/semana)
+            # Dar prioridad baja/media, pueden esperar
+            if days_to_exit <= 3:
+                return 55.0   # Un poco urgente
+            else:
+                return 35.0   # No urgente, mucho tiempo en óptimo
+        elif growth_rate < 2.5:  # Crecimiento moderado (10.5-17.5 kg/semana)
+            # Prioridad media-alta según días restantes
+            if days_to_exit <= 2:
+                return 75.0
+            elif days_to_exit <= 4:
+                return 60.0
+            else:
+                return 45.0
+        else:  # Crecimiento rápido (>17.5 kg/semana)
+            # Alta prioridad: saldrán pronto del óptimo
+            if days_to_exit <= 1:
+                return 100.0  # Máxima urgencia
+            elif days_to_exit <= 3:
+                return 85.0
+            else:
+                return 70.0
+    
+    # Si está por debajo del rango óptimo pero por encima de 100 kg
+    elif current_weight < optimal_min:
+        # Priorizar según cuándo entrarán al óptimo, considerando growth_rate
+        if days_to_enter <= 1:
+            # Entrará mañana: prioridad alta si crecimiento es rápido
+            return 65.0 + (urgency_factor * 10)  # 65-75
+        elif days_to_enter <= 3:
+            # Entrará en 2-3 días: prioridad moderada
+            return 35.0 + (urgency_factor * 15)  # 35-50
+        elif days_to_enter <= 5:
+            # Entrará en 4-5 días: prioridad baja
+            return 15.0 + (urgency_factor * 10)  # 15-25
+        else:
+            # Muy lejos: muy baja prioridad
+            return 5.0
+    
+    # Si está por encima del rango óptimo (115-150 kg)
+    else:
+        # Usar days_to_critical y growth_rate para determinar urgencia real
+        if current_weight >= warning_weight:  # 130-150 kg
+            # Zona peligrosa: alta penalización
+            if days_to_critical <= 2:
+                return 90.0   # Muy crítico
+            elif days_to_critical <= 5:
+                return 75.0   # Crítico
+            elif days_to_critical <= 10:
+                return 60.0   # Preocupante
+            else:
+                return 45.0   # Tiempo suficiente
+        elif current_weight >= 120:  # 120-130 kg
+            # Zona de penalización moderada: no pánico si growth_rate es bajo
+            if growth_rate < 1.5:  # Crecimiento lento
+                # Mucho tiempo hasta crítico, baja prioridad
+                return 30.0 + (5.0 if days_to_critical <= 10 else 0)
+            else:  # Crecimiento rápido
+                if days_to_critical <= 5:
+                    return 65.0   # Urgente
+                elif days_to_critical <= 10:
+                    return 50.0   # Moderado
+                else:
+                    return 38.0   # Controlable
+        else:  # 115-120 kg
+            # Recién salido del óptimo: mínima prioridad si crecimiento lento
+            if growth_rate < 1.5:
+                return 20.0   # Muy baja prioridad
+            elif days_to_critical <= 7:
+                return 35.0   # Prioridad baja-media
+            else:
+                return 25.0   # Prioridad baja
 
 
 # =========================
@@ -169,9 +317,9 @@ class Simulation:
         slaughterhouses: List[SlaughterhouseState],
         num_days: int = 10,
         sale_price_per_kg: float = 1.56,         # precio de venta canal
-        force_visit_weight: float = 120.0,       # peso a partir del cual la granja es obligatoria
+        force_visit_weight: float = 140.0,       # peso a partir del cual la granja es obligatoria
         truck_speed_kmph: float = 80.0,          # km/h
-        max_route_hours: float = 16.0,            # horas máx (incluye 30' por carga)
+        max_route_hours: float = 8.0,            # horas máx por ruta (incluye 30' por carga)
         weight_std_kg: float = 7.0,              # desviación estándar asumida
         max_trips_per_day_per_sh: Optional[int] = None,
 
@@ -181,6 +329,9 @@ class Simulation:
         cost_per_km_small: float = 1.15,             # €/km camión 10T
         cost_per_km_large: float = 1.25,             # €/km camión 20T
         weekly_truck_cost: float = 2_000.0,          # €/camión/semana
+        
+        # Costes de mantenimiento
+        feed_cost_per_pig_per_day: float = 0.50,     # €/cerdo/día (coste de comida)
     ):
         self.farms = farms
         self.slaughterhouses = slaughterhouses
@@ -198,13 +349,26 @@ class Simulation:
         self.cost_per_km_small = cost_per_km_small
         self.cost_per_km_large = cost_per_km_large
         self.weekly_truck_cost = weekly_truck_cost
+        self.feed_cost_per_pig_per_day = feed_cost_per_pig_per_day
 
         # Para compatibilidad: usamos la grande como "capacidad base"
         self.truck_capacity_kg = self.large_truck_capacity_kg
+        
+        # Tracking de beneficios por matadero
+        self.slaughterhouse_metrics: Dict[str, Dict] = {}
+        for sh in slaughterhouses:
+            self.slaughterhouse_metrics[sh.id] = {
+                "total_revenue": 0.0,
+                "total_purchase_cost": 0.0,
+                "total_transport_cost": 0.0,
+                "total_profit": 0.0,
+            }
 
         self.trips: List[TripResult] = []
         self.daily_metrics: List[Dict] = []
         self._next_trip_id: int = 1
+        self._next_truck_id: int = 1
+        self.truck_assignments: Dict[int, str] = {}  # trip_id -> truck_id
 
     # ---------- helpers de ruta / tiempo ----------
 
@@ -232,12 +396,14 @@ class Simulation:
         self,
         farm: FarmState,
         sh: SlaughterhouseState,
-        remaining_capacity: int
+        remaining_capacity: int,
+        current_day: int = 0
     ) -> Optional[Dict]:
         """
         Economía aproximada de un viaje solo a esta granja
         (se usa para priorizar qué granjas visitar).
         Se aproxima usando un camión grande (20T).
+        Incluye timing score basado en el growth rate.
         """
         if farm.inventory_pigs <= 0:
             return None
@@ -270,6 +436,9 @@ class Simulation:
 
         profit = revenue - purchase_cost - trip_cost
         profit_per_kg = profit / load_kg if load_kg > 0 else -1e9
+        
+        # Score de timing basado en growth rate y peso óptimo
+        timing_score = calculate_weight_timing_score(farm, current_day)
 
         return {
             "pigs": pigs_to_take,
@@ -281,6 +450,7 @@ class Simulation:
             "cost": trip_cost,
             "profit": profit,
             "profit_per_kg": profit_per_kg,
+            "timing_score": timing_score,
         }
 
     # ---------- bucle principal ----------
@@ -340,7 +510,7 @@ class Simulation:
 
                 scored_candidates = []
                 for farm in base_candidates:
-                    econ = self.farm_trip_economics(farm, sh, remaining_capacity)
+                    econ = self.farm_trip_economics(farm, sh, remaining_capacity, day)
                     if econ is None:
                         continue
                     mandatory = farm.avg_weight_kg >= self.force_visit_weight
@@ -352,19 +522,27 @@ class Simulation:
                 mandatory_candidates = [c for c in scored_candidates if c[2]]
                 optional_candidates = [c for c in scored_candidates if not c[2]]
 
-                # IMPORTANTE: NO filtramos por profit > 0 para que siempre haya viajes,
-                # incluso si el negocio total es poco rentable.
-                # optional_candidates = [c for c in optional_candidates if c[1]["profit"] > 0]
+                # Filtrar candidatos opcionales con peso inadecuado (timing_score negativo o muy bajo)
+                # Solo consideramos granjas con peso >= 100 kg (timing_score >= 0)
+                # Las obligatorias (>=120 kg) siempre se procesan
+                optional_candidates = [
+                    c for c in optional_candidates 
+                    if c[1]["timing_score"] >= 0 and c[1]["profit"] > 0
+                ]
 
                 if not mandatory_candidates and not optional_candidates:
                     # nada rentable y nada obligatorio
                     break
 
-                # orden: obligatorias primero, luego por beneficio/kg
+                # orden: obligatorias primero, luego por timing_score (peso óptimo) y beneficio/kg
+                # El timing_score ayuda a priorizar granjas en el rango óptimo de peso (105-115 kg)
                 ordered = sorted(
                     mandatory_candidates + optional_candidates,
-                    key=lambda x: (not x[2], x[1]["profit_per_kg"]),  # obligatorias primero
-                    reverse=True
+                    key=lambda x: (
+                        not x[2],  # obligatorias primero
+                        -x[1]["timing_score"],  # luego por timing (mayor score = mejor momento)
+                        -x[1]["profit_per_kg"]  # finalmente por beneficio
+                    )
                 )
 
                 # construir ruta respetando 8h (conducción+0.5h/granja) y máx 3 granjas
@@ -474,6 +652,62 @@ class Simulation:
                 mandatory_included = any(
                     f.avg_weight_kg >= self.force_visit_weight for f in route_farms
                 )
+                
+                # Asignar camión único para este viaje
+                truck_id = f"truck_{self._next_truck_id}"
+                self.truck_assignments[self._next_trip_id] = truck_id
+                self._next_truck_id += 1
+                
+                # Actualizar métricas económicas de las granjas con detalle de venta
+                for info in trip_farm_infos:
+                    farm = next(f for f in self.farms if f.id == info.farm_id)
+                    kg = info.load_kg
+                    pigs = info.pigs
+                    # Ingresos de la granja por venta (sin penalización, reciben el precio completo)
+                    farm_revenue = kg * farm.price_per_kg
+                    farm.total_revenue += farm_revenue
+                    
+                    # Calcular penalización para esta granja específica
+                    _, farm_penalty = weight_penalty_profile(
+                        farm.avg_weight_kg, self.weight_std_kg
+                    )
+                    
+                    # Registrar venta detallada
+                    farm.sales.append({
+                        "cantidad_cerdos_vendidos_granja": pigs,
+                        "penalty_recibido_granja": farm_penalty,  # fracción (0.0, 0.15, 0.20, etc.)
+                        "kg_vendidos": kg,
+                        "revenue": farm_revenue,
+                        "day": day,
+                        "trip_id": self._next_trip_id
+                    })
+                
+                # Registrar viaje en el matadero
+                week_index = day // 5
+                sh.trips.append({
+                    "trip_id": self._next_trip_id,
+                    "day": day,
+                    "km_recorridos": distance,
+                    "cost_per_km": cost_per_km,
+                    "coste": trip_cost,
+                    "truck_id": truck_id,
+                    "truck_type": truck_type,
+                })
+                
+                # Registrar camión usado en la semana correspondiente
+                if week_index == 0:
+                    sh.trucks_week_0.add(truck_id)
+                else:
+                    sh.trucks_week_1.add(truck_id)
+                
+                # Actualizar métricas económicas del matadero
+                # Revenue del matadero = venta final (con penalización aplicada)
+                # Costes = compra a granjas + transporte
+                slaughterhouse_profit = total_revenue - total_purchase_cost - trip_cost
+                self.slaughterhouse_metrics[sh.id]["total_revenue"] += total_revenue
+                self.slaughterhouse_metrics[sh.id]["total_purchase_cost"] += total_purchase_cost
+                self.slaughterhouse_metrics[sh.id]["total_transport_cost"] += trip_cost
+                self.slaughterhouse_metrics[sh.id]["total_profit"] += slaughterhouse_profit
 
                 trip = TripResult(
                     trip_id=self._next_trip_id,
@@ -529,9 +763,14 @@ class Simulation:
         self.daily_metrics.append(summary_day)
 
     def _update_farms_after_day(self):
-        """Crecimiento de peso diario simple."""
+        """Crecimiento de peso diario y tracking de kg de comida consumidos."""
         for f in self.farms:
             f.avg_weight_kg += f.growth_rate_kg_per_day
+            
+            # Kg de comida consumidos por día (aproximación: 2.5 kg comida por cerdo por día)
+            # Esto es equivalente a feed_cost_per_pig_per_day si el coste es 0.50€/kg
+            daily_feed_kg = f.inventory_pigs * 2.5  # 2.5 kg de comida por cerdo por día
+            f.kg_feed_consumed += daily_feed_kg
 
 
 # =========================
@@ -588,10 +827,10 @@ class SimulationEngine:
             farms=farms,
             slaughterhouses=slaughterhouses,
             num_days=num_days,
-            sale_price_per_kg=10.00,   # ajusta según tu modelo de negocio
-            force_visit_weight=120.0,
+            sale_price_per_kg=4.56,   # precio de venta canal según PDF
+            force_visit_weight=140.0,  # visita obligatoria a partir de 140kg
             truck_speed_kmph=80.0,
-            max_route_hours=22.0,
+            max_route_hours=8.0,      # máximo 8 horas por ruta según PDF
             weight_std_kg=7.0,
             max_trips_per_day_per_sh=None,
             small_truck_capacity_kg=10_000.0,
@@ -599,6 +838,7 @@ class SimulationEngine:
             cost_per_km_small=1.15,
             cost_per_km_large=1.25,
             weekly_truck_cost=2_000.0,
+            feed_cost_per_pig_per_day=0.50,  # coste diario de alimentación por cerdo
         )
 
         daily_metrics, trips = sim.run()
@@ -673,6 +913,34 @@ class SimulationEngine:
             "trucks": trucks_list,
         }
 
+        # Calcular resumen de beneficios por granja (nuevo formato)
+        farms_summary = []
+        for farm in sim.farms:
+            farms_summary.append({
+                "nombre": farm.name,
+                "ventas": farm.sales,  # lista de objetos con cantidad_cerdos_vendidos_granja y penalty_recibido_granja
+                "kg_comida_gastados": farm.kg_feed_consumed,
+            })
+        
+        # Calcular resumen de beneficios por matadero (nuevo formato)
+        slaughterhouses_summary = []
+        for sh in sim.slaughterhouses:
+            # Calcular costes de alquiler de camiones por semana
+            n_camiones_s1 = len(sh.trucks_week_0)
+            n_camiones_s2 = len(sh.trucks_week_1)
+            
+            slaughterhouses_summary.append({
+                "nombre": sh.name,
+                "viajes": sh.trips,  # lista con km_recorridos, cost_per_km, coste
+                "n_camiones_s1": n_camiones_s1,
+                "n_camiones_s2": n_camiones_s2,
+            })
+        
+        # Totales generales (calculados desde las ventas y costes)
+        total_farms_revenue = sum(f.total_revenue for f in sim.farms)
+        total_farms_feed_cost = sum(f.kg_feed_consumed * sim.feed_cost_per_pig_per_day for f in sim.farms)
+        total_slaughterhouses_profit = sum(m["total_profit"] for m in sim.slaughterhouse_metrics.values())
+        
         # Construir respuesta JSON amigable para el frontend
         return {
             "config": {
@@ -686,6 +954,7 @@ class SimulationEngine:
                 "truck_speed_kmph": sim.truck_speed_kmph,
                 "max_route_hours": sim.max_route_hours,
                 "weekly_truck_cost": sim.weekly_truck_cost,
+                "feed_cost_per_pig_per_day": sim.feed_cost_per_pig_per_day,
             },
             "farms": [asdict(f) for f in sim.farms],
             "slaughterhouses": [asdict(s) for s in sim.slaughterhouses],
@@ -698,4 +967,14 @@ class SimulationEngine:
                 for t in trips
             ],
             "fleet_summary": truck_summary,
+            "farms_economic_summary": farms_summary,
+            "slaughterhouses_economic_summary": slaughterhouses_summary,
+            "total_economic_summary": {
+                "total_farms_revenue": total_farms_revenue,
+                "total_farms_feed_cost": total_farms_feed_cost,
+                "total_farms_profit": total_farms_revenue - total_farms_feed_cost,
+                "total_slaughterhouses_profit": total_slaughterhouses_profit,
+                "total_truck_cost": total_truck_cost,
+                "net_system_profit": (total_farms_revenue - total_farms_feed_cost) + total_slaughterhouses_profit - total_truck_cost,
+            },
         }
