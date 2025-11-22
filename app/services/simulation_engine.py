@@ -941,6 +941,91 @@ class SimulationEngine:
         total_farms_feed_cost = sum(f.kg_feed_consumed * sim.feed_cost_per_pig_per_day for f in sim.farms)
         total_slaughterhouses_profit = sum(m["total_profit"] for m in sim.slaughterhouse_metrics.values())
         
+        # ========== OVERALL FARMS ==========
+        # Calcular beneficio bruto considerando penalties
+        total_farms_beneficio_bruto = 0.0
+        total_farms_perdidas_penalty = 0.0
+        
+        for farm in sim.farms:
+            for sale in farm.sales:
+                kg_vendidos = sale["kg_vendidos"]
+                penalty = sale["penalty_recibido_granja"]
+                
+                # Beneficio bruto = precio venta con penalty aplicado
+                beneficio_con_penalty = kg_vendidos * sim.sale_price_per_kg * (1 - penalty)
+                total_farms_beneficio_bruto += beneficio_con_penalty
+                
+                # Pérdidas por penalty = lo que se hubiera ganado sin penalty
+                beneficio_sin_penalty = kg_vendidos * sim.sale_price_per_kg
+                perdida_penalty = beneficio_sin_penalty - beneficio_con_penalty
+                total_farms_perdidas_penalty += perdida_penalty
+        
+        # Coste de comida (ya calculado): kg_comida * 0.50€/kg
+        # Pero el precio real de la comida es 0.20€/kg (más realista)
+        feed_price_per_kg = 0.20  # €/kg de comida
+        total_farms_coste = sum(f.kg_feed_consumed for f in sim.farms) * feed_price_per_kg
+        
+        overall_farms = {
+            "beneficio_bruto": round(total_farms_beneficio_bruto, 2),
+            "coste": round(total_farms_coste, 2),
+            "beneficio_neto": round(total_farms_beneficio_bruto - total_farms_coste, 2),
+            "perdidas_por_penalizacion": round(total_farms_perdidas_penalty, 2),
+        }
+        
+        # ========== OVERALL TRIPS ==========
+        total_viajes = len(trips)
+        
+        # Camiones por semana
+        trucks_week_0 = set()
+        trucks_week_1 = set()
+        for sh in sim.slaughterhouses:
+            trucks_week_0.update(sh.trucks_week_0)
+            trucks_week_1.update(sh.trucks_week_1)
+        
+        # Coste total de viajes (suma de costes de transporte)
+        total_trips_coste = sum(t.cost for t in trips)
+        
+        overall_trips = {
+            "total_viajes": total_viajes,
+            "total_camiones": {
+                "semana_1": len(trucks_week_0),
+                "semana_2": len(trucks_week_1),
+                "total": len(trucks_week_0.union(trucks_week_1)),
+            },
+            "coste_total": round(total_trips_coste, 2),
+        }
+        
+        # ========== OVERALL SLAUGHTERHOUSES ==========
+        overall_slaughterhouses_data = []
+        
+        for sh in sim.slaughterhouses:
+            # Beneficio bruto = ventas finales (con penalty aplicado)
+            beneficio_bruto_sh = sim.slaughterhouse_metrics[sh.id]["total_revenue"]
+            
+            # Costes = compras a granjas + transporte
+            coste_compras = sim.slaughterhouse_metrics[sh.id]["total_purchase_cost"]
+            coste_transporte = sim.slaughterhouse_metrics[sh.id]["total_transport_cost"]
+            coste_total_sh = coste_compras + coste_transporte
+            
+            # Beneficio neto
+            beneficio_neto_sh = beneficio_bruto_sh - coste_total_sh
+            
+            overall_slaughterhouses_data.append({
+                "nombre": sh.name,
+                "slaughterhouse_id": sh.id,
+                "beneficio_bruto": round(beneficio_bruto_sh, 2),
+                "coste": round(coste_total_sh, 2),
+                "beneficio_neto": round(beneficio_neto_sh, 2),
+            })
+        
+        # Totales agregados de slaughterhouses
+        overall_slaughterhouses = {
+            "slaughterhouses": overall_slaughterhouses_data,
+            "total_beneficio_bruto": round(sum(sh["beneficio_bruto"] for sh in overall_slaughterhouses_data), 2),
+            "total_coste": round(sum(sh["coste"] for sh in overall_slaughterhouses_data), 2),
+            "total_beneficio_neto": round(sum(sh["beneficio_neto"] for sh in overall_slaughterhouses_data), 2),
+        }
+        
         # Construir respuesta JSON amigable para el frontend
         return {
             "config": {
@@ -977,4 +1062,7 @@ class SimulationEngine:
                 "total_truck_cost": total_truck_cost,
                 "net_system_profit": (total_farms_revenue - total_farms_feed_cost) + total_slaughterhouses_profit - total_truck_cost,
             },
+            "overall_farms": overall_farms,
+            "overall_trips": overall_trips,
+            "overall_slaughterhouses": overall_slaughterhouses,
         }
