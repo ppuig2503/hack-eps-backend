@@ -5,6 +5,7 @@ from app.models.farm import Farm, FarmInit, FarmUpdate, FarmComplete
 from datetime import datetime
 import csv
 import io
+from app.core.utils import build_id_query
 
 router = APIRouter()
 
@@ -118,8 +119,8 @@ async def get_farms(db=Depends(get_db)):
 
 @router.get("/{farm_id}", response_model=Farm)
 async def get_farm(farm_id: str, db=Depends(get_db)):
-    """Obtener una granja por ID"""
-    farm = await db.farms.find_one({"_id": farm_id})
+    """Obtener una granja por ID"""    
+    farm = await db.farms.find_one(build_id_query(farm_id, "farm_id"))
     if not farm:
         raise HTTPException(status_code=404, detail="Farm not found")
     return farm

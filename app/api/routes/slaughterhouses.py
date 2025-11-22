@@ -5,6 +5,7 @@ from app.models.slaughterhouse import Slaughterhouse, SlaughterhouseInit
 from datetime import datetime
 import csv
 import io
+from app.core.utils import build_id_query
 
 router = APIRouter()
 
@@ -84,8 +85,8 @@ async def get_slaughterhouses(db=Depends(get_db)):
 
 @router.get("/{slaughterhouse_id}", response_model=Slaughterhouse)
 async def get_slaughterhouse(slaughterhouse_id: str, db=Depends(get_db)):
-    """Obtener un matadero por ID"""
-    slaughterhouse = await db.slaughterhouses.find_one({"_id": slaughterhouse_id})
+    """Obtener un matadero por ID"""    
+    slaughterhouse = await db.slaughterhouses.find_one(build_id_query(slaughterhouse_id, "slaughterhouse_id"))
     if not slaughterhouse:
         raise HTTPException(status_code=404, detail="Slaughterhouse not found")
     return slaughterhouse
