@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from app.core.config import settings
 from app.database.mongodb import MongoDB
 from app.api.routes import farms, slaughterhouses, transports, optimization
-
+from app.api.simulation import simulation
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,11 +31,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rutas
+# Rutas©
 app.include_router(farms.router, prefix="/api/farms", tags=["farms"])
 app.include_router(slaughterhouses.router, prefix="/api/slaughterhouses", tags=["slaughterhouses"])
 app.include_router(transports.router, prefix="/api/transports", tags=["transports"])
 app.include_router(optimization.router, prefix="/api/optimization", tags=["optimization"])
+app.include_router(simulation.router, prefix="/api/simulation", tags=["simulation"])
 
 @app.get("/")
 async def root():

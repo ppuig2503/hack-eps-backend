@@ -30,13 +30,24 @@ class PyObjectId(ObjectId):
         raise ValueError("Invalid ObjectId")
 
 
+class TransportInit(BaseModel):
+    """Modelo para inicializar un transporte"""
+    type: str  # "pequeño" o "normal"
+    
+    class Config:
+        populate_by_name = True
+
+
 class Transport(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     vehicle_id: str
-    capacity: int
-    current_location: dict
-    status: str
-    fuel_efficiency: float
+    type: str
+    capacity_tons: float
+    max_hours_per_week: int
+    fixed_weekly_cost: float
+    #current_location: Optional[dict] = None
+    #status: Optional[str] = "available"
+    #fuel_efficiency: Optional[float] = None
     
     class Config:
         populate_by_name = True

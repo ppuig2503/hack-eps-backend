@@ -38,6 +38,21 @@ class FarmInit(BaseModel):
     capacity: int
 
 
+class FarmComplete(BaseModel):
+    """Modelo para importar granja completa desde CSV"""
+    farm_id: Optional[str] = ""
+    name: str
+    lat: float
+    lon: float
+    capacity: int
+    inventory_pigs: Optional[int] = 0
+    avg_weight_kg: Optional[float] = 0.0
+    growth_rate_kg_per_week: Optional[float] = 0.0
+    age_weeks: Optional[int] = 0
+    price_per_kg: Optional[float] = 0.0
+    consumption_pigs: Optional[int] = 0
+
+
 class FarmUpdate(BaseModel):
     """Modelo para actualización semanal de datos de granja"""
     inventory_pigs: Optional[int] = None
