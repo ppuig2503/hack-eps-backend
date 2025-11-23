@@ -1121,11 +1121,20 @@ class SimulationEngine:
             "overall_slaughterhouses": overall_slaughterhouses,
         }
         
-        # Guardar solo los overalls en la base de datos
+        # Guardar resultado completo en la base de datos
         from datetime import datetime
         simulation_doc = {
             "timestamp": datetime.utcnow(),
             "num_days": num_days,
+            "config": result["config"],
+            "farms": result["farms"],
+            "slaughterhouses": result["slaughterhouses"],
+            "daily_metrics": result["daily_metrics"],
+            "trips": result["trips"],
+            "fleet_summary": result["fleet_summary"],
+            "farms_economic_summary": result["farms_economic_summary"],
+            "slaughterhouses_economic_summary": result["slaughterhouses_economic_summary"],
+            "total_economic_summary": result["total_economic_summary"],
             "overall_farms": overall_farms,
             "overall_trips": overall_trips,
             "overall_slaughterhouses": overall_slaughterhouses,

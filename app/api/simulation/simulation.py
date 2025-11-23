@@ -23,28 +23,34 @@ async def simulate(
 
 @router.get("/get-routes")
 async def get_routes(
-    num_days: int = Query(10, ge=1, le=30, description="Número de días a simular"),
     db=Depends(get_db),
 ):
     """
-    Obtiene todas las rutas de los viajes de la simulación.
+    Obtiene todas las rutas de los viajes de la última simulación guardada en la base de datos.
     Devuelve un array con cada viaje conteniendo:
-    - slaughterhouse_id: ID del matadero (origen y destino)
-    - farm_ids: lista de IDs de granjas visitadas en orden
+    - slaughterhouse: objeto con id, name, lat, lon
+    - farms: lista de granjas visitadas con coordenadas y detalles
     """
-    engine = SimulationEngine(db)
-    result = await engine.run_simulation(num_days=num_days)
+    # Obtener la última simulación de la base de datos
+    simulation = await db.simulation_results.find_one(sort=[("timestamp", -1)])
+    
+    if not simulation:
+        return {"error": "No simulations found"}
+    
+    # Extraer trips y slaughterhouses del documento guardado
+    trips = simulation.get("trips", [])
+    slaughterhouses = simulation.get("slaughterhouses", [])
     
     # Extraer información de ruta para cada viaje
     routes = []
-    for trip in result["trips"]:
+    for trip in trips:
         # Obtener coordenadas del matadero
         slaughterhouse = next(
-            (sh for sh in result["slaughterhouses"] if sh["id"] == trip["slaughterhouse_id"]),
+            (sh for sh in slaughterhouses if sh["id"] == trip["slaughterhouse_id"]),
             None
         )
         
-        # Construir lista de farms con coordenadas
+        # Construir lista de farms con coordenadas (ya vienen en el trip)
         farms_with_coords = [
             {
                 "farm_id": farm["farm_id"],
@@ -76,6 +82,9 @@ async def get_routes(
         })
     
     return {
+        "simulation_id": str(simulation["_id"]),
+        "timestamp": simulation["timestamp"],
+        "num_days": simulation["num_days"],
         "total_routes": len(routes),
         "routes": routes
     }
