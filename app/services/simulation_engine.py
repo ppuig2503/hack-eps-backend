@@ -1027,7 +1027,7 @@ class SimulationEngine:
         }
         
         # Construir respuesta JSON amigable para el frontend
-        return {
+        result = {
             "config": {
                 "num_days": num_days,
                 "truck_capacity_large_kg": sim.large_truck_capacity_kg,
@@ -1066,3 +1066,16 @@ class SimulationEngine:
             "overall_trips": overall_trips,
             "overall_slaughterhouses": overall_slaughterhouses,
         }
+        
+        # Guardar solo los overalls en la base de datos
+        from datetime import datetime
+        simulation_doc = {
+            "timestamp": datetime.utcnow(),
+            "num_days": num_days,
+            "overall_farms": overall_farms,
+            "overall_trips": overall_trips,
+            "overall_slaughterhouses": overall_slaughterhouses,
+        }
+        await self.db.simulation_results.insert_one(simulation_doc)
+        
+        return result
