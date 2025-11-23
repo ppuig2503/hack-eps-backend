@@ -6,6 +6,7 @@ from datetime import datetime
 import csv
 import io
 from app.core.utils import build_id_query
+from bson import ObjectId
 
 router = APIRouter()
 
@@ -103,24 +104,30 @@ async def edit_slaughterhouse(slaughterhouse_id: str, slaughterhouse_data: Slaug
     
     update_data["updated_at"] = datetime.utcnow()
     
-    result = await db.slaughterhouses.update_one(
-        {"slaughterhouse_id": slaughterhouse_id},
-        {"$set": update_data}
-    )
-    
+    filters = [{"slaughterhouse_id": slaughterhouse_id}]
+    try:
+        filters.append({"_id": ObjectId(slaughterhouse_id)})
+    except Exception:
+        pass
+
+    result = await db.slaughterhouses.update_one({"$or": filters}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Slaughterhouse not found")
-    
-    updated_slaughterhouse = await db.slaughterhouses.find_one({"slaughterhouse_id": slaughterhouse_id})
+    updated_slaughterhouse = await db.slaughterhouses.find_one({"$or": filters})
     return updated_slaughterhouse
 
 
 @router.delete("/delete", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_slaughterhouse(slaughterhouse_id: str, db=Depends(get_db)):
     """Eliminar un matadero"""
-    result = await db.slaughterhouses.delete_one({"slaughterhouse_id": slaughterhouse_id})
-    
+    # Try slaughterhouse_id field first, also accept _id as ObjectId
+    filters = [{"slaughterhouse_id": slaughterhouse_id}]
+    try:
+        filters.append({"_id": ObjectId(slaughterhouse_id)})
+    except Exception:
+        pass
+
+    result = await db.slaughterhouses.delete_one({"$or": filters})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Slaughterhouse not found")
-    
     return None
