@@ -468,6 +468,23 @@ class Simulation:
             if f.inventory_pigs > 0 and f.last_visit_week != week_index
         }
 
+        # Capturar estado previo de granjas para calcular diferencias
+        farms_prev_state = {
+            f.id: f.inventory_pigs for f in self.farms
+        }
+        
+        # Capturar estado previo de mataderos (cerdos procesados acumulados)
+        # Calculamos cerdos procesados por matadero en días anteriores
+        slaughterhouses_prev_pigs = {}
+        for sh in self.slaughterhouses:
+            # Sumar cerdos de todos los viajes previos de este matadero
+            total_prev = 0
+            for metric_day in self.daily_metrics:
+                sh_data = metric_day["by_slaughterhouse"].get(sh.id)
+                if sh_data:
+                    total_prev += sh_data["pigs_delivered"]
+            slaughterhouses_prev_pigs[sh.id] = total_prev
+
         summary_day = {
             "day": day,
             "total_pigs_delivered": 0,
@@ -477,7 +494,8 @@ class Simulation:
             "total_revenue": 0.0,
             "total_profit": 0.0,
             "num_trips": 0,
-            "by_slaughterhouse": {}
+            "by_slaughterhouse": {},
+            "by_farm": {}
         }
 
         # Inicializar capacidades y métricas por matadero
@@ -609,6 +627,29 @@ class Simulation:
             
             if not trip_created:
                 break
+
+        # Agregar métricas por granja al final del día
+        feed_price_per_kg = 0.20  # €/kg de comida
+        for farm in self.farms:
+            current_pigs = farm.inventory_pigs
+            prev_pigs = farms_prev_state[farm.id]
+            diff_pigs = current_pigs - prev_pigs
+            
+            summary_day["by_farm"][farm.id] = {
+                "farm_id": farm.id,
+                "farm_name": farm.name,
+                "current_pigs": current_pigs,
+                "diff_pigs": diff_pigs,
+                "accumulated_feed_cost": round(farm.kg_feed_consumed * feed_price_per_kg, 2)
+            }
+        
+        # Agregar diferencias de cerdos procesados por matadero
+        for sh in self.slaughterhouses:
+            current_total = slaughterhouses_prev_pigs[sh.id] + summary_day["by_slaughterhouse"][sh.id]["pigs_delivered"]
+            diff_pigs = summary_day["by_slaughterhouse"][sh.id]["pigs_delivered"]
+            
+            summary_day["by_slaughterhouse"][sh.id]["current_total_pigs"] = current_total
+            summary_day["by_slaughterhouse"][sh.id]["diff_pigs"] = diff_pigs
 
         self.daily_metrics.append(summary_day)
 
@@ -1096,7 +1137,14 @@ class SimulationEngine:
                 "feed_cost_per_pig_per_day": sim.feed_cost_per_pig_per_day,
             },
             "farms": [asdict(f) for f in sim.farms],
-            "slaughterhouses": [asdict(s) for s in sim.slaughterhouses],
+            "slaughterhouses": [
+                {
+                    **asdict(s),
+                    "trucks_week_0": list(s.trucks_week_0),
+                    "trucks_week_1": list(s.trucks_week_1),
+                }
+                for s in sim.slaughterhouses
+            ],
             "daily_metrics": daily_metrics,
             "trips": [
                 {
