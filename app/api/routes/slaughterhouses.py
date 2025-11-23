@@ -115,7 +115,7 @@ async def edit_slaughterhouse(slaughterhouse_id: str, slaughterhouse_data: Slaug
     return updated_slaughterhouse
 
 
-@router.delete("/{slaughterhouse_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/delete", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_slaughterhouse(slaughterhouse_id: str, db=Depends(get_db)):
     """Eliminar un matadero"""
     result = await db.slaughterhouses.delete_one({"slaughterhouse_id": slaughterhouse_id})
