@@ -74,12 +74,12 @@ async def init_farm(farm_data: FarmInit, db=Depends(get_db)):
         "lat": farm_data.lat,
         "lon": farm_data.lon,
         "capacity": farm_data.capacity,
-        "inventory_pigs": 0,
-        "avg_weight_kg": 0.0,
-        "growth_rate_kg_per_week": 0.0,
-        "age_weeks": 0,
-        "price_per_kg": 0.0,
-        "consumption_pigs": 0,
+        "inventory_pigs": farm_data.inventory_pigs or 0,
+        "avg_weight_kg": farm_data.avg_weight_kg or 0.0,
+        "growth_rate_kg_per_week": farm_data.growth_rate_kg_per_week or 0.0,
+        "age_weeks": farm_data.age_weeks or 0,
+        "price_per_kg": farm_data.price_per_kg or 0.0,
+        "consumption_pigs": farm_data.consumption_pigs or 0,
         "updated_at": datetime.utcnow()
     }
     

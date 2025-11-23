@@ -36,6 +36,12 @@ class FarmInit(BaseModel):
     lat: float
     lon: float
     capacity: int
+    inventory_pigs: Optional[int] = 0
+    avg_weight_kg: Optional[float] = 0.0
+    growth_rate_kg_per_week: Optional[float] = 0.0
+    age_weeks: Optional[int] = 0
+    price_per_kg: Optional[float] = 0.0
+    consumption_pigs: Optional[int] = 0
 
 
 class FarmComplete(BaseModel):
@@ -69,6 +75,12 @@ class FarmEdit(BaseModel):
     lat: Optional[float] = None
     lon: Optional[float] = None
     capacity: Optional[int] = None
+    inventory_pigs: Optional[int] = None
+    avg_weight_kg: Optional[float] = None
+    growth_rate_kg_per_week: Optional[float] = None
+    age_weeks: Optional[int] = None
+    price_per_kg: Optional[float] = None
+    consumption_pigs: Optional[int] = None
 
 
 class Farm(BaseModel):
