@@ -49,6 +49,7 @@ async def get_routes(
             "day": trip["day"],
             "total_pigs": trip["total_pigs"],
             "distance_km": trip["distance_km"],
+            "cost": trip["cost"]
         })
     
     return {
