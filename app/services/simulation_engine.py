@@ -480,10 +480,13 @@ class Simulation:
             "by_slaughterhouse": {}
         }
 
+        # Inicializar capacidades y métricas por matadero
+        slaughterhouse_capacities = {}
+        slaughterhouse_trips_count = {}
         for sh in self.slaughterhouses:
-            remaining_capacity = sh.capacity_per_day
-            sh_key = sh.id
-            summary_day["by_slaughterhouse"][sh_key] = {
+            slaughterhouse_capacities[sh.id] = sh.capacity_per_day
+            slaughterhouse_trips_count[sh.id] = 0
+            summary_day["by_slaughterhouse"][sh.id] = {
                 "slaughterhouse_id": sh.id,
                 "slaughterhouse_name": sh.name,
                 "pigs_delivered": 0,
@@ -494,273 +497,324 @@ class Simulation:
                 "profit": 0.0,
                 "num_trips": 0,
             }
-            trips_this_sh_today = 0
 
-            while remaining_capacity > 0:
+        # Bucle global: todos los mataderos compiten por las granjas
+        while farms_available_ids:
+            # Generar todas las posibles asignaciones granja-matadero
+            all_assignments = []
+            
+            for sh in self.slaughterhouses:
+                remaining_capacity = slaughterhouse_capacities[sh.id]
+                if remaining_capacity <= 0:
+                    continue
+                
                 if (self.max_trips_per_day_per_sh is not None
-                        and trips_this_sh_today >= self.max_trips_per_day_per_sh):
-                    break
+                        and slaughterhouse_trips_count[sh.id] >= self.max_trips_per_day_per_sh):
+                    continue
 
                 base_candidates = [
                     f for f in self.farms
                     if f.id in farms_available_ids and f.inventory_pigs > 0
                 ]
-                if not base_candidates:
-                    break
-
-                scored_candidates = []
+                
                 for farm in base_candidates:
                     econ = self.farm_trip_economics(farm, sh, remaining_capacity, day)
                     if econ is None:
                         continue
+                    
                     mandatory = farm.avg_weight_kg >= self.force_visit_weight
-                    scored_candidates.append((farm, econ, mandatory))
-
-                if not scored_candidates:
-                    break
-
-                mandatory_candidates = [c for c in scored_candidates if c[2]]
-                optional_candidates = [c for c in scored_candidates if not c[2]]
-
-                # Filtrar candidatos opcionales con peso inadecuado (timing_score negativo o muy bajo)
-                # Solo consideramos granjas con peso >= 100 kg (timing_score >= 0)
-                # Las obligatorias (>=120 kg) siempre se procesan
-                optional_candidates = [
-                    c for c in optional_candidates 
-                    if c[1]["timing_score"] >= 0 and c[1]["profit"] > 0
-                ]
-
-                if not mandatory_candidates and not optional_candidates:
-                    # nada rentable y nada obligatorio
-                    break
-
-                # orden: obligatorias primero, luego por timing_score (peso óptimo) y beneficio/kg
-                # El timing_score ayuda a priorizar granjas en el rango óptimo de peso (105-115 kg)
-                ordered = sorted(
-                    mandatory_candidates + optional_candidates,
-                    key=lambda x: (
-                        not x[2],  # obligatorias primero
-                        -x[1]["timing_score"],  # luego por timing (mayor score = mejor momento)
-                        -x[1]["profit_per_kg"]  # finalmente por beneficio
+                    
+                    # Filtrar granjas con timing inadecuado (solo opcionales)
+                    if not mandatory and (econ["timing_score"] < 0 or econ["profit"] <= 0):
+                        continue
+                    
+                    # Calcular score global considerando distancia, timing y beneficio
+                    distance_to_sh = haversine_km(sh.lat, sh.lon, farm.lat, farm.lon)
+                    
+                    # Score compuesto:
+                    # - Distancia: más cerca = mejor (normalizado, invertido)
+                    # - Timing: mayor timing_score = mejor
+                    # - Beneficio: mayor profit_per_kg = mejor
+                    # - Obligatorias tienen prioridad máxima
+                    
+                    distance_score = 1.0 / (1.0 + distance_to_sh / 100.0)  # normalizar por 100km
+                    timing_score_norm = max(0, econ["timing_score"]) / 100.0  # normalizar
+                    profit_score = max(0, econ["profit_per_kg"]) / 10.0  # normalizar
+                    
+                    global_score = (
+                        (10000 if mandatory else 0) +  # obligatorias primero
+                        distance_score * 40 +  # 40% peso a distancia
+                        timing_score_norm * 35 +  # 35% peso a timing
+                        profit_score * 25  # 25% peso a beneficio
                     )
-                )
-
-                # construir ruta respetando 8h (conducción+0.5h/granja) y máx 3 granjas
-                route_farms: List[FarmState] = []
-                for farm, econ, mandatory in ordered:
+                    
+                    all_assignments.append({
+                        "farm": farm,
+                        "slaughterhouse": sh,
+                        "econ": econ,
+                        "mandatory": mandatory,
+                        "distance": distance_to_sh,
+                        "global_score": global_score,
+                    })
+            
+            if not all_assignments:
+                break
+            
+            # Ordenar por score global (mayor score = mejor asignación)
+            all_assignments.sort(key=lambda x: -x["global_score"])
+            
+            # Seleccionar la mejor asignación viable
+            trip_created = False
+            for assignment in all_assignments:
+                farm = assignment["farm"]
+                sh = assignment["slaughterhouse"]
+                
+                # Verificar que la granja aún esté disponible y el matadero tenga capacidad
+                if farm.id not in farms_available_ids:
+                    continue
+                if slaughterhouse_capacities[sh.id] <= 0:
+                    continue
+                if (self.max_trips_per_day_per_sh is not None
+                        and slaughterhouse_trips_count[sh.id] >= self.max_trips_per_day_per_sh):
+                    continue
+                
+                # Intentar construir ruta óptima empezando por esta granja
+                route_farms = [farm]
+                
+                # Buscar granjas adicionales cercanas al matadero para completar la ruta
+                remaining_candidates = [
+                    a for a in all_assignments
+                    if a["farm"].id != farm.id
+                    and a["farm"].id in farms_available_ids
+                    and a["slaughterhouse"].id == sh.id
+                ]
+                
+                for candidate in remaining_candidates:
                     if len(route_farms) >= 3:
                         break
-                    tentative = route_farms + [farm]
+                    tentative = route_farms + [candidate["farm"]]
                     total_hours, _, _ = self.route_duration_hours(sh, tentative)
                     if total_hours <= self.max_route_hours:
                         route_farms = tentative
-                    else:
-                        continue
-
-                if not route_farms:
-                    # ninguna combinación viable en tiempo
-                    break
-
-                # asignación real de carga
-                total_pigs_trip = 0
-                total_load_kg = 0.0
-                trip_farm_infos: List[TripFarmInfo] = []
-
-                for farm in route_farms:
-                    if total_load_kg >= self.truck_capacity_kg or remaining_capacity <= 0:
-                        break
-
-                    max_pigs_by_truck = int(
-                        (self.truck_capacity_kg - total_load_kg) / max(farm.avg_weight_kg, 1e-6)
-                    )
-                    if max_pigs_by_truck <= 0:
-                        continue
-
-                    pigs_to_take = min(farm.inventory_pigs, remaining_capacity, max_pigs_by_truck)
-                    if pigs_to_take <= 0:
-                        continue
-
-                    farm.inventory_pigs -= pigs_to_take
-                    remaining_capacity -= pigs_to_take
-
-                    added_kg = pigs_to_take * farm.avg_weight_kg
-                    total_pigs_trip += pigs_to_take
-                    total_load_kg += added_kg
-
-                    trip_farm_infos.append(
-                        TripFarmInfo(
-                            farm_id=farm.id,
-                            farm_name=farm.name,
-                            lat=farm.lat,
-                            lon=farm.lon,
-                            pigs=pigs_to_take,
-                            load_kg=added_kg,
-                            avg_weight_kg=farm.avg_weight_kg
-                        )
-                    )
-
-                    farms_available_ids.discard(farm.id)
-                    farm.last_visit_week = week_index
-
-                if total_pigs_trip == 0:
-                    break
-
-                distance = self.route_distance(sh, route_farms)
-                total_hours, driving_hours, loading_hours = self.route_duration_hours(sh, route_farms)
-
-                # seguridad extra: no pasarse de 8h
-                if total_hours > self.max_route_hours:
-                    # rollback simple
-                    for info in trip_farm_infos:
-                        farm = next(f for f in self.farms if f.id == info.farm_id)
-                        farm.inventory_pigs += info.pigs
-                        remaining_capacity += info.pigs
-                    break
-
-                # Elegir tipo de camión según la carga del viaje
-                if total_load_kg <= self.small_truck_capacity_kg:
-                    truck_capacity = self.small_truck_capacity_kg
-                    truck_type = "10T"
-                    cost_per_km = self.cost_per_km_small
-                else:
-                    truck_capacity = self.large_truck_capacity_kg
-                    truck_type = "20T"
-                    cost_per_km = self.cost_per_km_large
-
-                load_factor = total_load_kg / truck_capacity
-                trip_cost = distance * cost_per_km * load_factor
-
-                # cálculo exacto de ingresos, compras y penalización media
-                total_revenue = 0.0
-                total_purchase_cost = 0.0
-                weighted_penalty = 0.0
-                for info in trip_farm_infos:
-                    kg = info.load_kg
-                    farm = next(f for f in self.farms if f.id == info.farm_id)
-                    _, farm_penalty = weight_penalty_profile(
-                        farm.avg_weight_kg, self.weight_std_kg
-                    )
-                    revenue_farm = kg * self.sale_price_per_kg * (1 - farm_penalty)
-                    purchase_farm = kg * farm.price_per_kg
-
-                    total_revenue += revenue_farm
-                    total_purchase_cost += purchase_farm
-                    weighted_penalty += (kg / total_load_kg) * farm_penalty
-
-                trip_profit = total_revenue - total_purchase_cost - trip_cost
-                avg_profit_per_kg = trip_profit / total_load_kg if total_load_kg > 0 else 0.0
-                mandatory_included = any(
-                    f.avg_weight_kg >= self.force_visit_weight for f in route_farms
+                
+                # Ejecutar el viaje
+                trip_created = self._execute_trip(
+                    day, week_index, sh, route_farms, 
+                    slaughterhouse_capacities, slaughterhouse_trips_count,
+                    farms_available_ids, summary_day
                 )
                 
-                # Asignar camión único para este viaje
-                truck_id = f"truck_{self._next_truck_id}"
-                self.truck_assignments[self._next_trip_id] = truck_id
-                self._next_truck_id += 1
-                
-                # Actualizar métricas económicas de las granjas con detalle de venta
-                for info in trip_farm_infos:
-                    farm = next(f for f in self.farms if f.id == info.farm_id)
-                    kg = info.load_kg
-                    pigs = info.pigs
-                    # Ingresos de la granja por venta (sin penalización, reciben el precio completo)
-                    farm_revenue = kg * farm.price_per_kg
-                    farm.total_revenue += farm_revenue
-                    
-                    # Calcular penalización para esta granja específica
-                    _, farm_penalty = weight_penalty_profile(
-                        farm.avg_weight_kg, self.weight_std_kg
-                    )
-                    
-                    # Registrar venta detallada
-                    farm.sales.append({
-                        "cantidad_cerdos_vendidos_granja": pigs,
-                        "penalty_recibido_granja": farm_penalty,  # fracción (0.0, 0.15, 0.20, etc.)
-                        "kg_vendidos": kg,
-                        "revenue": farm_revenue,
-                        "day": day,
-                        "trip_id": self._next_trip_id
-                    })
-                
-                # Registrar viaje en el matadero
-                week_index = day // 5
-                sh.trips.append({
-                    "trip_id": self._next_trip_id,
-                    "day": day,
-                    "km_recorridos": distance,
-                    "cost_per_km": cost_per_km,
-                    "coste": trip_cost,
-                    "truck_id": truck_id,
-                    "truck_type": truck_type,
-                })
-                
-                # Registrar camión usado en la semana correspondiente
-                if week_index == 0:
-                    sh.trucks_week_0.add(truck_id)
-                else:
-                    sh.trucks_week_1.add(truck_id)
-                
-                # Actualizar métricas económicas del matadero
-                # Revenue del matadero = venta final (con penalización aplicada)
-                # Costes = compra a granjas + transporte
-                slaughterhouse_profit = total_revenue - total_purchase_cost - trip_cost
-                self.slaughterhouse_metrics[sh.id]["total_revenue"] += total_revenue
-                self.slaughterhouse_metrics[sh.id]["total_purchase_cost"] += total_purchase_cost
-                self.slaughterhouse_metrics[sh.id]["total_transport_cost"] += trip_cost
-                self.slaughterhouse_metrics[sh.id]["total_profit"] += slaughterhouse_profit
-
-                trip = TripResult(
-                    trip_id=self._next_trip_id,
-                    day=day,
-                    slaughterhouse_id=sh.id,
-                    slaughterhouse_name=sh.name,
-                    farms=trip_farm_infos,
-                    total_pigs=total_pigs_trip,
-                    total_load_kg=total_load_kg,
-                    distance_km=distance,
-                    duration_hours=total_hours,
-                    driving_hours=driving_hours,
-                    loading_hours=loading_hours,
-                    num_farms=len(trip_farm_infos),
-
-                    truck_type=truck_type,
-                    truck_capacity_kg=truck_capacity,
-
-                    cost=trip_cost,
-                    purchase_cost=total_purchase_cost,
-                    revenue=total_revenue,
-                    penalty_fraction=weighted_penalty,
-                    profit=trip_profit,
-                    load_factor=load_factor,
-                    avg_profit_per_kg=avg_profit_per_kg,
-                    mandatory_included=mandatory_included
-                )
-                self._next_trip_id += 1
-                self.trips.append(trip)
-                trips_this_sh_today += 1
-
-                # actualizar métricas
-                summary_day["total_pigs_delivered"] += total_pigs_trip
-                summary_day["total_kg_delivered"] += total_load_kg
-                summary_day["total_cost"] += trip_cost
-                summary_day["total_purchase_cost"] += total_purchase_cost
-                summary_day["total_revenue"] += total_revenue
-                summary_day["total_profit"] += trip_profit
-                summary_day["num_trips"] += 1
-
-                sh_metrics = summary_day["by_slaughterhouse"][sh_key]
-                sh_metrics["pigs_delivered"] += total_pigs_trip
-                sh_metrics["kg_delivered"] += total_load_kg
-                sh_metrics["cost"] += trip_cost
-                sh_metrics["purchase_cost"] += total_purchase_cost
-                sh_metrics["revenue"] += total_revenue
-                sh_metrics["profit"] += trip_profit
-                sh_metrics["num_trips"] += 1
-
-                if remaining_capacity <= 0:
+                if trip_created:
                     break
+            
+            if not trip_created:
+                break
 
         self.daily_metrics.append(summary_day)
+
+    def _execute_trip(
+        self, day: int, week_index: int, sh: SlaughterhouseState, 
+        route_farms: List[FarmState], slaughterhouse_capacities: Dict,
+        slaughterhouse_trips_count: Dict, farms_available_ids: set,
+        summary_day: Dict
+    ) -> bool:
+        """Ejecuta un viaje y actualiza todas las métricas. Retorna True si se creó el viaje."""
+        
+        remaining_capacity = slaughterhouse_capacities[sh.id]
+        
+        # Asignación real de carga
+        total_pigs_trip = 0
+        total_load_kg = 0.0
+        trip_farm_infos: List[TripFarmInfo] = []
+
+        for farm in route_farms:
+            if total_load_kg >= self.truck_capacity_kg or remaining_capacity <= 0:
+                break
+
+            max_pigs_by_truck = int(
+                (self.truck_capacity_kg - total_load_kg) / max(farm.avg_weight_kg, 1e-6)
+            )
+            if max_pigs_by_truck <= 0:
+                continue
+
+            pigs_to_take = min(farm.inventory_pigs, remaining_capacity, max_pigs_by_truck)
+            if pigs_to_take <= 0:
+                continue
+
+            farm.inventory_pigs -= pigs_to_take
+            remaining_capacity -= pigs_to_take
+
+            added_kg = pigs_to_take * farm.avg_weight_kg
+            total_pigs_trip += pigs_to_take
+            total_load_kg += added_kg
+
+            trip_farm_infos.append(
+                TripFarmInfo(
+                    farm_id=farm.id,
+                    farm_name=farm.name,
+                    lat=farm.lat,
+                    lon=farm.lon,
+                    pigs=pigs_to_take,
+                    load_kg=added_kg,
+                    avg_weight_kg=farm.avg_weight_kg
+                )
+            )
+
+            farms_available_ids.discard(farm.id)
+            farm.last_visit_week = week_index
+
+        if total_pigs_trip == 0:
+            return False
+
+        distance = self.route_distance(sh, route_farms)
+        total_hours, driving_hours, loading_hours = self.route_duration_hours(sh, route_farms)
+
+        # Verificar límite de tiempo
+        if total_hours > self.max_route_hours:
+            # Rollback
+            for info in trip_farm_infos:
+                farm = next(f for f in self.farms if f.id == info.farm_id)
+                farm.inventory_pigs += info.pigs
+                farms_available_ids.add(info.farm_id)
+            return False
+
+        # Elegir tipo de camión
+        if total_load_kg <= self.small_truck_capacity_kg:
+            truck_capacity = self.small_truck_capacity_kg
+            truck_type = "10T"
+            cost_per_km = self.cost_per_km_small
+        else:
+            truck_capacity = self.large_truck_capacity_kg
+            truck_type = "20T"
+            cost_per_km = self.cost_per_km_large
+
+        load_factor = total_load_kg / truck_capacity
+        trip_cost = distance * cost_per_km * load_factor
+
+        # Calcular ingresos y penalizaciones
+        total_revenue = 0.0
+        total_purchase_cost = 0.0
+        weighted_penalty = 0.0
+        for info in trip_farm_infos:
+            kg = info.load_kg
+            farm = next(f for f in self.farms if f.id == info.farm_id)
+            _, farm_penalty = weight_penalty_profile(
+                farm.avg_weight_kg, self.weight_std_kg
+            )
+            revenue_farm = kg * self.sale_price_per_kg * (1 - farm_penalty)
+            purchase_farm = kg * farm.price_per_kg
+
+            total_revenue += revenue_farm
+            total_purchase_cost += purchase_farm
+            weighted_penalty += (kg / total_load_kg) * farm_penalty
+
+        trip_profit = total_revenue - total_purchase_cost - trip_cost
+        avg_profit_per_kg = trip_profit / total_load_kg if total_load_kg > 0 else 0.0
+        mandatory_included = any(
+            f.avg_weight_kg >= self.force_visit_weight for f in route_farms
+        )
+        
+        # Asignar camión único
+        truck_id = f"truck_{self._next_truck_id}"
+        self.truck_assignments[self._next_trip_id] = truck_id
+        self._next_truck_id += 1
+        
+        # Actualizar métricas de granjas
+        for info in trip_farm_infos:
+            farm = next(f for f in self.farms if f.id == info.farm_id)
+            kg = info.load_kg
+            pigs = info.pigs
+            farm_revenue = kg * farm.price_per_kg
+            farm.total_revenue += farm_revenue
+            
+            _, farm_penalty = weight_penalty_profile(
+                farm.avg_weight_kg, self.weight_std_kg
+            )
+            
+            farm.sales.append({
+                "cantidad_cerdos_vendidos_granja": pigs,
+                "penalty_recibido_granja": farm_penalty,
+                "kg_vendidos": kg,
+                "revenue": farm_revenue,
+                "day": day,
+                "trip_id": self._next_trip_id
+            })
+        
+        # Registrar viaje en matadero
+        sh.trips.append({
+            "trip_id": self._next_trip_id,
+            "day": day,
+            "km_recorridos": distance,
+            "cost_per_km": cost_per_km,
+            "coste": trip_cost,
+            "truck_id": truck_id,
+            "truck_type": truck_type,
+        })
+        
+        # Registrar camión por semana
+        if week_index == 0:
+            sh.trucks_week_0.add(truck_id)
+        else:
+            sh.trucks_week_1.add(truck_id)
+        
+        # Actualizar métricas del matadero
+        slaughterhouse_profit = total_revenue - total_purchase_cost - trip_cost
+        self.slaughterhouse_metrics[sh.id]["total_revenue"] += total_revenue
+        self.slaughterhouse_metrics[sh.id]["total_purchase_cost"] += total_purchase_cost
+        self.slaughterhouse_metrics[sh.id]["total_transport_cost"] += trip_cost
+        self.slaughterhouse_metrics[sh.id]["total_profit"] += slaughterhouse_profit
+
+        # Crear TripResult
+        trip = TripResult(
+            trip_id=self._next_trip_id,
+            day=day,
+            slaughterhouse_id=sh.id,
+            slaughterhouse_name=sh.name,
+            farms=trip_farm_infos,
+            total_pigs=total_pigs_trip,
+            total_load_kg=total_load_kg,
+            distance_km=distance,
+            duration_hours=total_hours,
+            driving_hours=driving_hours,
+            loading_hours=loading_hours,
+            num_farms=len(trip_farm_infos),
+            truck_type=truck_type,
+            truck_capacity_kg=truck_capacity,
+            cost=trip_cost,
+            purchase_cost=total_purchase_cost,
+            revenue=total_revenue,
+            penalty_fraction=weighted_penalty,
+            profit=trip_profit,
+            load_factor=load_factor,
+            avg_profit_per_kg=avg_profit_per_kg,
+            mandatory_included=mandatory_included
+        )
+        self._next_trip_id += 1
+        self.trips.append(trip)
+        
+        # Actualizar capacidades y contadores
+        slaughterhouse_capacities[sh.id] = remaining_capacity
+        slaughterhouse_trips_count[sh.id] += 1
+        
+        # Actualizar summary_day
+        summary_day["total_pigs_delivered"] += total_pigs_trip
+        summary_day["total_kg_delivered"] += total_load_kg
+        summary_day["total_cost"] += trip_cost
+        summary_day["total_purchase_cost"] += total_purchase_cost
+        summary_day["total_revenue"] += total_revenue
+        summary_day["total_profit"] += trip_profit
+        summary_day["num_trips"] += 1
+
+        sh_metrics = summary_day["by_slaughterhouse"][sh.id]
+        sh_metrics["pigs_delivered"] += total_pigs_trip
+        sh_metrics["kg_delivered"] += total_load_kg
+        sh_metrics["cost"] += trip_cost
+        sh_metrics["purchase_cost"] += total_purchase_cost
+        sh_metrics["revenue"] += total_revenue
+        sh_metrics["profit"] += trip_profit
+        sh_metrics["num_trips"] += 1
+        
+        return True
 
     def _update_farms_after_day(self):
         """Crecimiento de peso diario y tracking de kg de comida consumidos."""
