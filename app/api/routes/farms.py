@@ -148,13 +148,17 @@ async def edit_farm(farm_id: str, farm_data: FarmEdit, db=Depends(get_db)):
     return updated_farm
 
 
-@router.delete("/{farm_id}", status_code=status.HTTP_204_NO_CONTENT)
+
+@router.delete("/delete", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_farm(farm_id: str, db=Depends(get_db)):
-    """Eliminar una granja"""
-    result = await db.farms.delete_one({"farm_id": farm_id})
-    
+    # Try farm_id field first, also accept _id as ObjectId
+    filters = [{"farm_id": farm_id}]
+    try:
+        filters.append({"_id": ObjectId(farm_id)})
+    except Exception:
+        pass
+
+    result = await db.farms.delete_one({"$or": filters})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Farm not found")
-    
     return None
-
