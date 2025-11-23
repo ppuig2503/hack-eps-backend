@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from typing import List
 from app.database.mongodb import get_db
-from app.models.farm import Farm, FarmInit, FarmUpdate, FarmComplete
+from app.models.farm import Farm, FarmInit, FarmUpdate, FarmComplete, FarmEdit
 from datetime import datetime
 import csv
 import io
