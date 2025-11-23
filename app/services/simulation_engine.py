@@ -94,6 +94,9 @@ class TripResult:
     load_factor: float
     avg_profit_per_kg: float
     mandatory_included: bool
+    
+    # Huella de carbono
+    carbon_footprint_kg: float  # kg CO2 emitidos en el viaje
 
 
 # =========================
@@ -332,6 +335,10 @@ class Simulation:
         
         # Costes de mantenimiento
         feed_cost_per_pig_per_day: float = 0.50,     # €/cerdo/día (coste de comida)
+        
+        # Emisiones de carbono
+        co2_per_km_small: float = 0.8,               # kg CO2/km camión 10T
+        co2_per_km_large: float = 1.2,               # kg CO2/km camión 20T
     ):
         self.farms = farms
         self.slaughterhouses = slaughterhouses
@@ -350,6 +357,8 @@ class Simulation:
         self.cost_per_km_large = cost_per_km_large
         self.weekly_truck_cost = weekly_truck_cost
         self.feed_cost_per_pig_per_day = feed_cost_per_pig_per_day
+        self.co2_per_km_small = co2_per_km_small
+        self.co2_per_km_large = co2_per_km_large
 
         # Para compatibilidad: usamos la grande como "capacidad base"
         self.truck_capacity_kg = self.large_truck_capacity_kg
@@ -683,13 +692,16 @@ class Simulation:
             truck_capacity = self.small_truck_capacity_kg
             truck_type = "10T"
             cost_per_km = self.cost_per_km_small
+            co2_per_km = self.co2_per_km_small
         else:
             truck_capacity = self.large_truck_capacity_kg
             truck_type = "20T"
             cost_per_km = self.cost_per_km_large
+            co2_per_km = self.co2_per_km_large
 
         load_factor = total_load_kg / truck_capacity
         trip_cost = distance * cost_per_km * load_factor
+        carbon_footprint = distance * co2_per_km  # kg CO2
 
         # Calcular ingresos y penalizaciones
         total_revenue = 0.0
@@ -787,7 +799,8 @@ class Simulation:
             profit=trip_profit,
             load_factor=load_factor,
             avg_profit_per_kg=avg_profit_per_kg,
-            mandatory_included=mandatory_included
+            mandatory_included=mandatory_included,
+            carbon_footprint_kg=carbon_footprint
         )
         self._next_trip_id += 1
         self.trips.append(trip)
@@ -893,6 +906,8 @@ class SimulationEngine:
             cost_per_km_large=1.25,
             weekly_truck_cost=2_000.0,
             feed_cost_per_pig_per_day=0.50,  # coste diario de alimentación por cerdo
+            co2_per_km_small=0.8,  # kg CO2/km camión 10T
+            co2_per_km_large=1.2,  # kg CO2/km camión 20T
         )
 
         daily_metrics, trips = sim.run()
@@ -1039,6 +1054,9 @@ class SimulationEngine:
         # Coste total de viajes (suma de costes de transporte)
         total_trips_coste = sum(t.cost for t in trips)
         
+        # Huella de carbono total
+        total_carbon_footprint = sum(t.carbon_footprint_kg for t in trips)
+        
         overall_trips = {
             "total_viajes": total_viajes,
             "total_camiones": {
@@ -1047,6 +1065,7 @@ class SimulationEngine:
                 "total": len(trucks_week_0.union(trucks_week_1)),
             },
             "coste_total": round(total_trips_coste, 2),
+            "carbon_footprint_total_kg": round(total_carbon_footprint, 2),
         }
         
         # ========== OVERALL SLAUGHTERHOUSES ==========
@@ -1094,6 +1113,8 @@ class SimulationEngine:
                 "max_route_hours": sim.max_route_hours,
                 "weekly_truck_cost": sim.weekly_truck_cost,
                 "feed_cost_per_pig_per_day": sim.feed_cost_per_pig_per_day,
+                "co2_per_km_small": sim.co2_per_km_small,
+                "co2_per_km_large": sim.co2_per_km_large,
             },
             "farms": [asdict(f) for f in sim.farms],
             "slaughterhouses": [asdict(s) for s in sim.slaughterhouses],
@@ -1105,6 +1126,8 @@ class SimulationEngine:
                 }
                 for t in trips
             ],
+            "carbon_footprint": [t.carbon_footprint_kg for t in trips],
+            "total_carbon_footprint": round(total_carbon_footprint, 2),
             "fleet_summary": truck_summary,
             "farms_economic_summary": farms_summary,
             "slaughterhouses_economic_summary": slaughterhouses_summary,
@@ -1129,6 +1152,14 @@ class SimulationEngine:
             "overall_farms": overall_farms,
             "overall_trips": overall_trips,
             "overall_slaughterhouses": overall_slaughterhouses,
+            "total_carbon_footprint_kg": round(total_carbon_footprint, 2),
+            "trips": [
+                {
+                    **{k: v for k, v in asdict(t).items() if k != "farms"},
+                    "farms": [asdict(fi) for fi in t.farms],
+                }
+                for t in trips
+            ],
         }
         await self.db.simulation_results.insert_one(simulation_doc)
         
