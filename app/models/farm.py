@@ -48,6 +48,14 @@ class FarmUpdate(BaseModel):
     consumption_pigs: Optional[int] = None
 
 
+class FarmEdit(BaseModel):
+    """Modelo para edición de datos básicos de granja por el usuario"""
+    name: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    capacity: Optional[int] = None
+
+
 class Farm(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     farm_id: Optional[str] = None

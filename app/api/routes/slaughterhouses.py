@@ -36,13 +36,13 @@ async def get_slaughterhouses(db=Depends(get_db)):
 @router.get("/{slaughterhouse_id}", response_model=Slaughterhouse)
 async def get_slaughterhouse(slaughterhouse_id: str, db=Depends(get_db)):
     """Obtener un matadero por ID"""
-    slaughterhouse = await db.slaughterhouses.find_one({"_id": slaughterhouse_id})
+    slaughterhouse = await db.slaughterhouses.find_one({"slaughterhouse_id": slaughterhouse_id})
     if not slaughterhouse:
         raise HTTPException(status_code=404, detail="Slaughterhouse not found")
     return slaughterhouse
 
 
-@router.put("/edit", response_model=Slaughterhouse)
+@router.put("/{slaughterhouse_id}/edit", response_model=Slaughterhouse)
 async def edit_slaughterhouse(slaughterhouse_id: str, slaughterhouse_data: SlaughterhouseUpdate, db=Depends(get_db)):
     """Editar un matadero existente"""
     # Filtrar solo los campos que se enviaron
@@ -54,21 +54,21 @@ async def edit_slaughterhouse(slaughterhouse_id: str, slaughterhouse_data: Slaug
     update_data["updated_at"] = datetime.utcnow()
     
     result = await db.slaughterhouses.update_one(
-        {"_id": slaughterhouse_id},
+        {"slaughterhouse_id": slaughterhouse_id},
         {"$set": update_data}
     )
     
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Slaughterhouse not found")
     
-    updated_slaughterhouse = await db.slaughterhouses.find_one({"_id": slaughterhouse_id})
+    updated_slaughterhouse = await db.slaughterhouses.find_one({"slaughterhouse_id": slaughterhouse_id})
     return updated_slaughterhouse
 
 
 @router.delete("/{slaughterhouse_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_slaughterhouse(slaughterhouse_id: str, db=Depends(get_db)):
     """Eliminar un matadero"""
-    result = await db.slaughterhouses.delete_one({"_id": slaughterhouse_id})
+    result = await db.slaughterhouses.delete_one({"slaughterhouse_id": slaughterhouse_id})
     
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Slaughterhouse not found")

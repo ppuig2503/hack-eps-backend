@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List
 from app.database.mongodb import get_db
-from app.models.farm import Farm, FarmInit, FarmUpdate
+from app.models.farm import Farm, FarmInit, FarmUpdate, FarmEdit
 from datetime import datetime
+
+from bson import ObjectId
 
 router = APIRouter()
 
@@ -44,14 +46,14 @@ async def update_farm_weekly(farm_id: str, farm_data: FarmUpdate, db=Depends(get
     update_data["updated_at"] = datetime.utcnow()
     
     result = await db.farms.update_one(
-        {"_id": farm_id},
+        {"farm_id": farm_id},
         {"$set": update_data}
     )
     
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Farm not found")
     
-    updated_farm = await db.farms.find_one({"_id": farm_id})
+    updated_farm = await db.farms.find_one({"farm_id": farm_id})
     return updated_farm
 
 
@@ -65,39 +67,36 @@ async def get_farms(db=Depends(get_db)):
 @router.get("/{farm_id}", response_model=Farm)
 async def get_farm(farm_id: str, db=Depends(get_db)):
     """Obtener una granja por ID"""
-    farm = await db.farms.find_one({"_id": farm_id})
+    farm = await db.farms.find_one({"farm_id": farm_id})
     if not farm:
         raise HTTPException(status_code=404, detail="Farm not found")
     return farm
 
 
-@router.put("/{farm_id}", response_model=Farm)
-async def edit_farm(farm_id: str, farm_data: FarmUpdate, db=Depends(get_db)):
-    """Editar una granja existente"""
-    # Filtrar solo los campos que se enviaron
+@router.put("/{farm_id}/edit", response_model=Farm)
+async def edit_farm(farm_id: str, farm_data: FarmEdit, db=Depends(get_db)):
     update_data = {k: v for k, v in farm_data.dict(exclude_unset=True).items() if v is not None}
-    
     if not update_data:
         raise HTTPException(status_code=400, detail="No data to update")
-    
     update_data["updated_at"] = datetime.utcnow()
-    
-    result = await db.farms.update_one(
-        {"_id": farm_id},
-        {"$set": update_data}
-    )
-    
+
+    filters = [{"farm_id": farm_id}]
+    try:
+        filters.append({"_id": ObjectId(farm_id)})
+    except Exception:
+        pass
+
+    result = await db.farms.update_one({"$or": filters}, {"$set": update_data})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Farm not found")
-    
-    updated_farm = await db.farms.find_one({"_id": farm_id})
+    updated_farm = await db.farms.find_one({"$or": filters})
     return updated_farm
 
 
 @router.delete("/{farm_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_farm(farm_id: str, db=Depends(get_db)):
     """Eliminar una granja"""
-    result = await db.farms.delete_one({"_id": farm_id})
+    result = await db.farms.delete_one({"farm_id": farm_id})
     
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Farm not found")
