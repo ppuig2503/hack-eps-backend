@@ -56,6 +56,15 @@ class SlaughterhouseInit(BaseModel):
         raise ValueError("Either lon or longitude must be provided")
 
 
+class SlaughterhouseUpdate(BaseModel):
+    """Modelo para actualización de datos de matadero"""
+    name: Optional[str] = None
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    capacity_per_day: Optional[int] = None
+    current_load: Optional[int] = None
+
+
 class Slaughterhouse(BaseModel):
     id: Optional[PyObjectId] = Field(alias="_id", default=None)
     slaughterhouse_id: Optional[str] = None

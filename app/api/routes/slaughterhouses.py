@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from typing import List
 from app.database.mongodb import get_db
-from app.models.slaughterhouse import Slaughterhouse, SlaughterhouseInit
+from app.models.slaughterhouse import Slaughterhouse, SlaughterhouseInit, SlaughterhouseUpdate
 from datetime import datetime
 import csv
 import io
@@ -90,3 +90,37 @@ async def get_slaughterhouse(slaughterhouse_id: str, db=Depends(get_db)):
     if not slaughterhouse:
         raise HTTPException(status_code=404, detail="Slaughterhouse not found")
     return slaughterhouse
+
+
+@router.put("/{slaughterhouse_id}/edit", response_model=Slaughterhouse)
+async def edit_slaughterhouse(slaughterhouse_id: str, slaughterhouse_data: SlaughterhouseUpdate, db=Depends(get_db)):
+    """Editar un matadero existente"""
+    # Filtrar solo los campos que se enviaron
+    update_data = {k: v for k, v in slaughterhouse_data.dict(exclude_unset=True).items() if v is not None}
+    
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No data to update")
+    
+    update_data["updated_at"] = datetime.utcnow()
+    
+    result = await db.slaughterhouses.update_one(
+        {"slaughterhouse_id": slaughterhouse_id},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Slaughterhouse not found")
+    
+    updated_slaughterhouse = await db.slaughterhouses.find_one({"slaughterhouse_id": slaughterhouse_id})
+    return updated_slaughterhouse
+
+
+@router.delete("/{slaughterhouse_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_slaughterhouse(slaughterhouse_id: str, db=Depends(get_db)):
+    """Eliminar un matadero"""
+    result = await db.slaughterhouses.delete_one({"slaughterhouse_id": slaughterhouse_id})
+    
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Slaughterhouse not found")
+    
+    return None
