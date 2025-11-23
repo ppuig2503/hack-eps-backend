@@ -38,18 +38,41 @@ async def get_routes(
     # Extraer información de ruta para cada viaje
     routes = []
     for trip in result["trips"]:
-        farm_ids = [farm["farm_id"] for farm in trip["farms"]]
+        # Obtener coordenadas del matadero
+        slaughterhouse = next(
+            (sh for sh in result["slaughterhouses"] if sh["id"] == trip["slaughterhouse_id"]),
+            None
+        )
+        
+        # Construir lista de farms con coordenadas
+        farms_with_coords = [
+            {
+                "farm_id": farm["farm_id"],
+                "farm_name": farm["farm_name"],
+                "lat": farm["lat"],
+                "lon": farm["lon"],
+                "pigs": farm["pigs"],
+                "load_kg": farm["load_kg"]
+            }
+            for farm in trip["farms"]
+        ]
         
         routes.append({
             "trip_id": trip["trip_id"],
-            "slaughterhouse_id": trip["slaughterhouse_id"],
-            "slaughterhouse_name": trip["slaughterhouse_name"],
-            "farm_ids": farm_ids,
-            "farm_names": [farm["farm_name"] for farm in trip["farms"]],
+            "slaughterhouse": {
+                "id": trip["slaughterhouse_id"],
+                "name": trip["slaughterhouse_name"],
+                "lat": slaughterhouse["lat"] if slaughterhouse else None,
+                "lon": slaughterhouse["lon"] if slaughterhouse else None
+            },
+            "farms": farms_with_coords,
             "day": trip["day"],
             "total_pigs": trip["total_pigs"],
             "distance_km": trip["distance_km"],
-            "cost": trip["cost"]
+            "cost": trip["cost"],
+            "purchase_cost": trip["purchase_cost"],
+            "revenue": trip["revenue"],
+            "profit": trip["profit"]
         })
     
     return {
