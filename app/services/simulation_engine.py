@@ -730,7 +730,7 @@ class Simulation:
             cost_per_km = self.cost_per_km_large
 
         load_factor = total_load_kg / truck_capacity
-        trip_cost = distance * cost_per_km * load_factor
+        trip_cost = distance * cost_per_km
 
         # Calcular ingresos y penalizaciones
         total_revenue = 0.0
