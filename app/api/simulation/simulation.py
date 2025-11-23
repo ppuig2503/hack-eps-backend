@@ -265,3 +265,77 @@ async def get_overall_slaughterhouses_by_id(simulation_id: str, db=Depends(get_d
         "num_days": simulation["num_days"],
         "overall_slaughterhouses": simulation.get("overall_slaughterhouses", {})
     }
+
+
+@router.get("/simulate/{day}")
+async def get_day_metrics(day: int, db=Depends(get_db)):
+    """
+    Obtiene las métricas de un día específico de la última simulación.
+    Devuelve:
+    - slaughterhouses: lista con id, lat, lon, numero_cerdos, diferencia_cerdos
+    - farms: lista con id, lat, lon, numero_cerdos, diferencia_cerdos, gasto_alimento_acumulado
+    """
+    # Obtener la última simulación
+    simulation = await db.simulation_results.find_one(sort=[("timestamp", -1)])
+    
+    if not simulation:
+        return {"error": "No simulations found"}
+    
+    # Validar que el día existe
+    if day < 0 or day >= simulation["num_days"]:
+        return {"error": f"Day {day} is out of range. Valid days: 0-{simulation['num_days']-1}"}
+    
+    # Obtener daily_metrics del día específico
+    daily_metrics = simulation.get("daily_metrics", [])
+    
+    if day >= len(daily_metrics):
+        return {"error": f"Day {day} not found in daily_metrics"}
+    
+    day_data = daily_metrics[day]
+    
+    # Obtener datos de slaughterhouses y farms con sus coordenadas
+    slaughterhouses_data = simulation.get("slaughterhouses", [])
+    farms_data = simulation.get("farms", [])
+    
+    # Construir respuesta de slaughterhouses
+    slaughterhouses_response = []
+    by_slaughterhouse = day_data.get("by_slaughterhouse", {})
+    
+    for sh in slaughterhouses_data:
+        sh_id = sh["id"]
+        sh_metrics = by_slaughterhouse.get(sh_id, {})
+        
+        slaughterhouses_response.append({
+            "id": sh_id,
+            "name": sh.get("name", ""),
+            "lat": sh.get("lat"),
+            "lon": sh.get("lon"),
+            "numero_cerdos": sh_metrics.get("current_total_pigs", 0),
+            "diferencia_cerdos": sh_metrics.get("diff_pigs", 0)
+        })
+    
+    # Construir respuesta de farms
+    farms_response = []
+    by_farm = day_data.get("by_farm", {})
+    
+    for farm in farms_data:
+        farm_id = farm["id"]
+        farm_metrics = by_farm.get(farm_id, {})
+        
+        farms_response.append({
+            "id": farm_id,
+            "name": farm.get("name", ""),
+            "lat": farm.get("lat"),
+            "lon": farm.get("lon"),
+            "numero_cerdos": farm_metrics.get("current_pigs", 0),
+            "diferencia_cerdos": farm_metrics.get("diff_pigs", 0),
+            "gasto_alimento_acumulado": farm_metrics.get("accumulated_feed_cost", 0.0)
+        })
+    
+    return {
+        "simulation_id": str(simulation["_id"]),
+        "timestamp": simulation["timestamp"],
+        "day": day,
+        "slaughterhouses": slaughterhouses_response,
+        "farms": farms_response
+    }
